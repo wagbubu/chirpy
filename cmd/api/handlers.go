@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 func (cfg *apiConfig) healthCheck(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +39,7 @@ func (cfg *apiConfig) validateChirp(w http.ResponseWriter, r *http.Request) {
 	}
 	err := cfg.readJSON(r, &input)
 	if err != nil {
-		cfg.errorResponse(w, http.StatusInternalServerError, err.Error())
+		cfg.errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -47,7 +48,17 @@ func (cfg *apiConfig) validateChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = cfg.writeJSON(w, envelope{"valid": true})
+	splittedWords := strings.Fields(input.Body)
+
+	for i := range splittedWords {
+		if _, ok := profane[strings.ToLower(splittedWords[i])]; ok {
+			splittedWords[i] = "****"
+		}
+	}
+
+	modifiedResp := strings.Join(splittedWords, " ")
+
+	err = cfg.writeJSON(w, envelope{"cleaned_body": modifiedResp})
 	if err != nil {
 		cfg.errorResponse(w, http.StatusInternalServerError, err.Error())
 	}
