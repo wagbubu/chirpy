@@ -30,13 +30,18 @@ func (cfg *apiConfig) readJSON(r *http.Request, dst interface{}) error {
 	return nil
 }
 
-func (cfg *apiConfig) writeJSON(w http.ResponseWriter, data interface{}) error {
-	w.Header().Set("Content-Type", "application/json")
+func (cfg *apiConfig) writeJSON(w http.ResponseWriter, status int, data interface{}, headers http.Header) error {
 	jsonRes, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("error marshalling json")
+		return err
 	}
 
+	for key, value := range headers {
+		w.Header()[key] = value
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	w.Write(jsonRes)
 	return nil
 }
