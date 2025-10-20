@@ -3,13 +3,68 @@ package main
 import (
 	"chirpy/internal/database"
 	"chirpy/internal/dto"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+func (api *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+	if chirpID == "" {
+		api.errorResponse(w, http.StatusNotFound, "chirp not found")
+		return
+	}
+
+	id, err := uuid.Parse(chirpID)
+	if err != nil {
+		api.errorResponse(w, http.StatusNotFound, "chirp not found")
+	}
+
+	chirp, err := api.db.GetChirp(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			api.errorResponse(w, http.StatusNotFound, "chirp not found")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "something went wrong")
+		}
+		return
+	}
+
+	err = api.writeJSON(w, http.StatusOK, dto.Chirp{ID: chirp.ID, Body: chirp.Body, CreatedAt: chirp.CreatedAt, UpdatedAt: chirp.UpdatedAt, UserID: chirp.UserID}, nil)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "error writing a response")
+	}
+}
+
+func (api *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := api.db.GetAllChirps(r.Context())
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "failed to get all chirps")
+		return
+	}
+
+	chirpsResponse := make([]dto.Chirp, 0, len(chirps))
+	for _, chirp := range chirps {
+		chirpsResponse = append(chirpsResponse, dto.Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		})
+	}
+
+	err = api.writeJSON(w, http.StatusOK, chirpsResponse, nil)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "error writing a response")
+	}
+}
 
 func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	var input struct {
