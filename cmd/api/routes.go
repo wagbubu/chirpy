@@ -11,6 +11,7 @@ func (api *apiConfig) routes() http.Handler {
 	mux.HandleFunc("GET /admin/metrics", api.metrics)
 	mux.HandleFunc("POST /admin/reset", api.reset)
 	mux.HandleFunc("POST /api/users", api.createUser)
+	mux.HandleFunc("POST /api/login", api.loginUser)
 	mux.HandleFunc("POST /api/chirps", api.createChirp)
 	mux.HandleFunc("GET /api/chirps", api.getAllChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", api.getChirp)

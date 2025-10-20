@@ -1,12 +1,14 @@
 package main
 
 import (
+	"chirpy/internal/auth"
 	"chirpy/internal/database"
 	"chirpy/internal/dto"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -23,6 +25,7 @@ func (api *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chirpID)
 	if err != nil {
 		api.errorResponse(w, http.StatusNotFound, "chirp not found")
+		return
 	}
 
 	chirp, err := api.db.GetChirp(r.Context(), id)
@@ -39,6 +42,7 @@ func (api *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	err = api.writeJSON(w, http.StatusOK, dto.Chirp{ID: chirp.ID, Body: chirp.Body, CreatedAt: chirp.CreatedAt, UpdatedAt: chirp.UpdatedAt, UserID: chirp.UserID}, nil)
 	if err != nil {
 		api.errorResponse(w, http.StatusInternalServerError, "error writing a response")
+		return
 	}
 }
 
@@ -63,6 +67,7 @@ func (api *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
 	err = api.writeJSON(w, http.StatusOK, chirpsResponse, nil)
 	if err != nil {
 		api.errorResponse(w, http.StatusInternalServerError, "error writing a response")
+		return
 	}
 }
 
@@ -102,13 +107,53 @@ func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	err = api.writeJSON(w, http.StatusCreated, dto.Chirp{ID: newChirp.ID, CreatedAt: newChirp.CreatedAt, UpdatedAt: newChirp.UpdatedAt, Body: newChirp.Body, UserID: newChirp.UserID}, nil)
 	if err != nil {
 		api.errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
+	err := api.readJSON(r, &input)
+	if err != nil {
+		api.errorResponse(w, http.StatusBadRequest, "malformed form request")
+		return
+	}
+
+	user, err := api.db.GetUser(r.Context(), input.Email)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			api.errorResponse(w, http.StatusUnauthorized, "invalid login")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "something went wrong")
+		}
+		return
+	}
+
+	match, err := auth.CheckPasswordHash(input.Password, user.HashedPassword)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+	if !match {
+		api.errorResponse(w, http.StatusUnauthorized, "invalid login credentials")
+		return
+	}
+	err = api.writeJSON(w, http.StatusOK, dto.User{ID: user.ID, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Email: user.Email}, nil)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
 }
 
 func (api *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&input)
@@ -121,7 +166,14 @@ func (api *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := api.db.CreateUser(r.Context(), input.Email)
+	hashedPassword, err := auth.HashPassword(input.Password)
+	if err != nil {
+		log.Fatal("error hashing password")
+		return
+	}
+
+	newUser := database.CreateUserParams{Email: input.Email, HashedPassword: hashedPassword}
+	user, err := api.db.CreateUser(r.Context(), newUser)
 	if err != nil {
 		fmt.Println(err)
 		api.errorResponse(w, http.StatusBadRequest, "error creating user")
