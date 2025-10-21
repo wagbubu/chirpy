@@ -11,9 +11,12 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+var defaultTokenExpirationTime = int(time.Hour.Seconds())
 
 func (api *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	chirpID := r.PathValue("chirpID")
@@ -97,11 +100,12 @@ func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modifiedResp := strings.Join(splittedWords, " ")
-	chirp := database.CreateChirpParams{Body: modifiedResp, UserID: input.UserID}
+	chirp := database.CreateChirpParams{Body: modifiedResp, UserID: api.contextGetUserID(r)}
 
 	newChirp, err := api.db.CreateChirp(r.Context(), chirp)
 	if err != nil {
 		api.errorResponse(w, http.StatusInternalServerError, "failed to create chirp in the database")
+		return
 	}
 
 	err = api.writeJSON(w, http.StatusCreated, dto.Chirp{ID: newChirp.ID, CreatedAt: newChirp.CreatedAt, UpdatedAt: newChirp.UpdatedAt, Body: newChirp.Body, UserID: newChirp.UserID}, nil)
@@ -113,14 +117,19 @@ func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 
 func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	err := api.readJSON(r, &input)
 	if err != nil {
 		api.errorResponse(w, http.StatusBadRequest, "malformed form request")
 		return
+	}
+
+	if input.ExpiresInSeconds == 0 || input.ExpiresInSeconds > defaultTokenExpirationTime {
+		input.ExpiresInSeconds = defaultTokenExpirationTime
 	}
 
 	user, err := api.db.GetUser(r.Context(), input.Email)
@@ -143,7 +152,23 @@ func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		api.errorResponse(w, http.StatusUnauthorized, "invalid login credentials")
 		return
 	}
-	err = api.writeJSON(w, http.StatusOK, dto.User{ID: user.ID, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Email: user.Email}, nil)
+
+	token, err := auth.MakeJWT(user.ID, api.jwtSecret, time.Duration(input.ExpiresInSeconds)*time.Second)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	resp := dto.User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+		Token:     token,
+	}
+
+	r.Context()
+	err = api.writeJSON(w, http.StatusOK, resp, nil)
 	if err != nil {
 		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
 		return
