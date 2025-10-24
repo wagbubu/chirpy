@@ -16,8 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-var defaultTokenExpirationTime = int(time.Hour.Seconds())
-
 func (api *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	chirpID := r.PathValue("chirpID")
 	if chirpID == "" {
@@ -117,19 +115,14 @@ func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 
 func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	err := api.readJSON(r, &input)
 	if err != nil {
 		api.errorResponse(w, http.StatusBadRequest, "malformed form request")
 		return
-	}
-
-	if input.ExpiresInSeconds == 0 || input.ExpiresInSeconds > defaultTokenExpirationTime {
-		input.ExpiresInSeconds = defaultTokenExpirationTime
 	}
 
 	user, err := api.db.GetUser(r.Context(), input.Email)
@@ -153,18 +146,37 @@ func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.MakeJWT(user.ID, api.jwtSecret, time.Duration(input.ExpiresInSeconds)*time.Second)
+	token, err := auth.MakeJWT(user.ID, api.jwtSecret, time.Hour)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	refreshTokenToStoreInDB := database.InsertRefreshTokenParams{
+		Token:     refreshToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(time.Hour * 24 * 60).UTC(),
+	}
+
+	err = api.db.InsertRefreshToken(r.Context(), refreshTokenToStoreInDB)
 	if err != nil {
 		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
 		return
 	}
 
 	resp := dto.User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     token,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: refreshToken,
 	}
 
 	r.Context()
@@ -173,6 +185,64 @@ func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
 		return
 	}
+}
+
+func (api *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidToken):
+			api.errorResponse(w, http.StatusUnauthorized, "unauthorized")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		}
+		return
+	}
+
+	userID, err := api.db.GetUserRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			api.errorResponse(w, http.StatusUnauthorized, "unauthorized")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		}
+		return
+	}
+	fmt.Println("RAN UP TO HERE")
+	token, err := auth.MakeJWT(userID, api.jwtSecret, time.Hour)
+	if err != nil {
+
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	err = api.writeJSON(w, http.StatusOK, envelope{"token": token}, nil)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+}
+
+func (api *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidToken):
+			api.errorResponse(w, http.StatusUnauthorized, "unauthorized")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		}
+		return
+	}
+
+	err = api.db.RevokeToken(r.Context(), token)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (api *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {

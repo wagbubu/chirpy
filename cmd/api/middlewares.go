@@ -2,8 +2,6 @@ package main
 
 import (
 	"chirpy/internal/auth"
-	"errors"
-	"log"
 	"net/http"
 )
 
@@ -21,15 +19,11 @@ func (api *apiConfig) authenticate(next http.HandlerFunc) http.HandlerFunc {
 		token, err := auth.GetBearerToken(r.Header)
 		if err != nil {
 			api.errorResponse(w, http.StatusUnauthorized, err.Error())
+			return
 		}
 		userID, err := auth.ValidateJWT(token, api.jwtSecret)
 		if err != nil {
-			switch {
-			case errors.Is(err, auth.ErrExpiredToken):
-				api.errorResponse(w, http.StatusUnauthorized, err.Error())
-			default:
-				log.Fatal(err)
-			}
+			api.errorResponse(w, http.StatusUnauthorized, err.Error())
 			return
 		}
 
