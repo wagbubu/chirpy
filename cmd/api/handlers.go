@@ -98,7 +98,12 @@ func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modifiedResp := strings.Join(splittedWords, " ")
-	chirp := database.CreateChirpParams{Body: modifiedResp, UserID: api.contextGetUserID(r)}
+	userID, err := api.contextGetUserID(r)
+	if err != nil {
+		api.errorResponse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	chirp := database.CreateChirpParams{Body: modifiedResp, UserID: userID}
 
 	newChirp, err := api.db.CreateChirp(r.Context(), chirp)
 	if err != nil {
@@ -111,6 +116,51 @@ func (api *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 		api.errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+}
+
+func (api *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+	if chirpID == "" {
+		api.errorResponse(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	chirpUUID, err := uuid.Parse(chirpID)
+	if err != nil {
+		api.errorResponse(w, http.StatusBadRequest, "invalid chirp id")
+		return
+	}
+
+	userID, err := api.contextGetUserID(r)
+	if err != nil {
+		api.errorResponse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	chirp, err := api.db.GetChirp(r.Context(), chirpUUID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			api.errorResponse(w, http.StatusNotFound, "chirp not found")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		}
+		return
+	}
+
+	if chirp.UserID != userID {
+		api.errorResponse(w, http.StatusForbidden, "you are not allowed to delete this resource")
+		return
+	}
+
+	args := database.DeleteChirpParams{ID: chirpUUID, UserID: userID}
+	err = api.db.DeleteChirp(r.Context(), args)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (api *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +331,49 @@ func (api *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+}
+
+func (api *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	err := api.readJSON(r, &input)
+	if err != nil {
+		api.errorResponse(w, http.StatusBadRequest, "malformed request")
+		return
+	}
+
+	userID, err := api.contextGetUserID(r)
+	if err != nil {
+		api.errorResponse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(input.Password)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "something went wrong!")
+		return
+	}
+
+	args := database.UpdateUserParams{Email: input.Email, HashedPassword: hashedPassword, ID: userID}
+	updatedUser, err := api.db.UpdateUser(r.Context(), args)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			api.errorResponse(w, http.StatusBadRequest, "invalid credentials")
+		default:
+			api.errorResponse(w, http.StatusInternalServerError, "somethign went wrong!")
+		}
+		return
+	}
+
+	err = api.writeJSON(w, http.StatusOK, dto.User{ID: updatedUser.ID, CreatedAt: updatedUser.CreatedAt, UpdatedAt: updatedUser.UpdatedAt, Email: updatedUser.Email}, nil)
+	if err != nil {
+		api.errorResponse(w, http.StatusInternalServerError, "somethign went wrong!")
+		return
+	}
 }
 
 func (api *apiConfig) healthCheck(w http.ResponseWriter, r *http.Request) {

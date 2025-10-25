@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -16,11 +17,11 @@ func (api *apiConfig) contextSetUserID(r *http.Request, user uuid.UUID) *http.Re
 	return r.WithContext(ctx)
 }
 
-func (api *apiConfig) contextGetUserID(r *http.Request) uuid.UUID {
+func (api *apiConfig) contextGetUserID(r *http.Request) (uuid.UUID, error) {
 	user, ok := r.Context().Value(userIDContextKey).(uuid.UUID)
 	if !ok {
-		panic("missing userID value in request context")
+		return uuid.Nil, errors.New("user ID not in context")
 	}
 
-	return user
+	return user, nil
 }
